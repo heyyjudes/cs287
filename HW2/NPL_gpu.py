@@ -1,6 +1,4 @@
-NPL_gpu.py
 
-# Text text processing library
 import torchtext
 import torch
 import math 
@@ -81,43 +79,43 @@ def train(model, criterion, optim, data_iterator):
         print("Epoch Val Loss: ", loss, "Perplexity: ", math.exp(loss)) 
         loss = evaluate(model, test_iter)
         print("Epoch Test Loss: ", loss, "Perplexity: ", math.exp(loss))
+if __name__ == "__main__": 
+
+	if torch.cuda.is_available():
+		print("running cuda device")
+		torch.cuda.manual_seed(0)
 
 
-if torch.cuda.is_available():
-	print("running cuda device")
-	torch.cuda.manual_seed(args.seed)
+	# size of the embeddings and vectors
+	n_embedding = 30
+	n_hidden = 60
+	seq_len = 5
+	n_epochs = 10
+	learning_rate = .1
+
+	# Our input $x$
+	TEXT = torchtext.data.Field()
+	# Data distributed with the assignment
+	train, val, test = torchtext.datasets.LanguageModelingDataset.splits(
+	    path=".", 
+	    train="train.txt", validation="valid.txt", test="valid.txt", text_field=TEXT)
+	TEXT.build_vocab(train)
+	print('len(TEXT.vocab)', len(TEXT.vocab))
+
+	if DEBUG == True:
+	    TEXT.build_vocab(train, max_size=1000)
+	    len(TEXT.vocab)
+	    print('len(TEXT.vocab)', len(TEXT.vocab))
+	    
+	train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
+	    (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
 
 
-# size of the embeddings and vectors
-n_embedding = 30
-n_hidden = 60
-seq_len = 5
-n_epochs = 10
-learning_rate = .1
-
-# Our input $x$
-TEXT = torchtext.data.Field()
-# Data distributed with the assignment
-train, val, test = torchtext.datasets.LanguageModelingDataset.splits(
-    path=".", 
-    train="train.txt", validation="valid.txt", test="valid.txt", text_field=TEXT)
-TEXT.build_vocab(train)
-print('len(TEXT.vocab)', len(TEXT.vocab))
-
-if DEBUG == True:
-    TEXT.build_vocab(train, max_size=1000)
-    len(TEXT.vocab)
-    print('len(TEXT.vocab)', len(TEXT.vocab))
-    
-train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
-    (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
+	# initialize LSTM
+	npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
+	npl.cuda() 
+	criterion = nn.NLLLoss()
+	optim = torch.optim.SGD(npl.parameters(), lr = learning_rate)
 
 
-# initialize LSTM
-npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
-nlp.cuda() 
-criterion = nn.NLLLoss()
-optim = torch.optim.SGD(npl.parameters(), lr = learning_rate)
-
-
-train(npl, criterion, optim, test_iter)
+	train(npl, criterion, optim, test_iter)
