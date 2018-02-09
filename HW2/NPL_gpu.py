@@ -7,7 +7,6 @@ from torchtext.vocab import Vectors
 DEBUG = True 
 
 class NPLM(nn.Module):
-
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len):
         super(NPLM, self).__init__()
         self.vocab_size = V_vocab_dim
@@ -20,20 +19,12 @@ class NPLM(nn.Module):
 
     def forward(self, x):
         x_embed = self.embed(x)
-        print(x.shape)
-        #print(x_embed.shape)
         x_flat = torch.autograd.Variable(torch.cat(x_embed.data, dim=1))
-        #print(x_flat.shape)
         hidden_feat = self.hidden_linear(x_flat)
-        #print(hidden_feat.shape)
         hidden_act = self.tanh_act(hidden_feat)
-        #print(hidden_act.shape)
         hidden_out = self.U_linear(hidden_act)
-        #print(hidden_out.shape)
         direct = self.W_linear(x_flat)
-        #print(direct.shape)
         out = direct + hidden_out
-        #print(out.shape)
         return self.softmax(out)
 
 def evaluate(model, data_iterator):
@@ -62,7 +53,7 @@ def train_batch(model, criterion, optim, batch, label):
     return loss.data[0]
 
 # training loop
-def train(model, criterion, optim, data_iterator):
+def run_training(model, criterion, optim, data_iterator):
 
     for e in range(n_epochs):
         batches = 0
@@ -79,43 +70,44 @@ def train(model, criterion, optim, data_iterator):
         print("Epoch Val Loss: ", loss, "Perplexity: ", math.exp(loss)) 
         loss = evaluate(model, test_iter)
         print("Epoch Test Loss: ", loss, "Perplexity: ", math.exp(loss))
+
 if __name__ == "__main__": 
-
-	if torch.cuda.is_available():
-		print("running cuda device")
-		torch.cuda.manual_seed(0)
-
-
-	# size of the embeddings and vectors
-	n_embedding = 30
-	n_hidden = 60
-	seq_len = 5
-	n_epochs = 10
-	learning_rate = .1
-
-	# Our input $x$
-	TEXT = torchtext.data.Field()
-	# Data distributed with the assignment
-	train, val, test = torchtext.datasets.LanguageModelingDataset.splits(
-	    path=".", 
-	    train="train.txt", validation="valid.txt", test="valid.txt", text_field=TEXT)
-	TEXT.build_vocab(train)
-	print('len(TEXT.vocab)', len(TEXT.vocab))
-
-	if DEBUG == True:
-	    TEXT.build_vocab(train, max_size=1000)
-	    len(TEXT.vocab)
-	    print('len(TEXT.vocab)', len(TEXT.vocab))
-	    
-	train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
-	    (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
+    if torch.cuda.is_available():
+        print("running cuda device")
+        torch.cuda.manual_seed(0)
 
 
-	# initialize LSTM
-	npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
-	npl.cuda() 
-	criterion = nn.NLLLoss()
-	optim = torch.optim.SGD(npl.parameters(), lr = learning_rate)
+    # size of the embeddings and vectors
+    n_embedding = 30
+    n_hidden = 60
+    seq_len = 5
+    n_epochs = 20
+    learning_rate = .1
 
+    # Our input $x$
+    TEXT = torchtext.data.Field()
+    # Data distributed with the assignment
+    train, val, test = torchtext.datasets.LanguageModelingDataset.splits(
+        path=".", 
+        train="train.txt", validation="valid.txt", test="valid.txt", text_field=TEXT)
+    TEXT.build_vocab(train)
+    print('len(TEXT.vocab)', len(TEXT.vocab))
 
-	train(npl, criterion, optim, test_iter)
+    if DEBUG == True:
+        TEXT.build_vocab(train, max_size=1000)
+        len(TEXT.vocab)
+        print('len(TEXT.vocab)', len(TEXT.vocab))
+
+    train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
+        (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
+
+    # initialize LSTM
+    npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
+    criterion = nn.NLLLoss()
+    optim = torch.optim.SGD(npl.parameters(), lr = learning_rate)
+
+    if torch.cuda.is_available():
+        npl.cuda() 
+
+    run_training(npl, criterion, optim, test_iter)
+    torch.save(npl.state_dict(), 'npl_model.pt')
