@@ -27,25 +27,29 @@ class NPLM(nn.Module):
         out = direct + hidden_out
         return self.softmax(out)
 
-def evaluate(model, data_iterator):
+def evaluate(model, data_iterator
+            ):
     # Turn on evaluation mode which disables dropout.
-    model.eval()
+    #model.eval()
     total_loss = 0
-    batch_count = 0 
+    batch_count = 0
     for batch in iter(data_iterator):
-        for i in range(batch.text.size(0) - 5):
-            output = model(batch.text[i:i+5])
-            target = batch.target[i+5]
-            total_loss += criterion(output, target).data
-            batch_count += 1 
-    return total_loss[0] / batch_count
+        batch_loss = 0
+        N_tokens = batch.text.size(0) - 4
+        for i in range(N_tokens):
+            output = model(batch.text[i:i+4])
+            target = batch.text[i+4]
+            batch_loss += criterion(output, target).data[0]
+        total_loss += batch_loss/N_tokens
+        batch_count += 1
+    return total_loss / batch_count
 
 def train_batch(model, criterion, optim, batch, label):
     # initialize hidden vectors
     model.zero_grad()
     # calculate forward pass
     y = model(batch)
-    # calculate loss    
+    # calculate loss
     loss = criterion(y, label)
     # backpropagate and step
     loss.backward()
@@ -53,23 +57,24 @@ def train_batch(model, criterion, optim, batch, label):
     return loss.data[0]
 
 # training loop
-def run_training(model, criterion, optim, data_iterator):
+def run_train(model, criterion, optim, data_iterator):
 
     for e in range(n_epochs):
         batches = 0
         epoch_loss = 0
-        avg_loss = 0
         for batch in iter(data_iterator):
-            for i in range(batch.text.size(0) - 5): 
-                batch_loss = train_batch(model, criterion, optim, batch.text[i:i+5], batch.target[i+5])
-                batches += 1
-                epoch_loss += batch_loss
-                avg_loss = ((avg_loss * (batches - 1)) + batch_loss) / batches
-        print("Epoch ", e, " Loss: ", epoch_loss, "Perplexity: ", math.exp(avg_loss))
+            batch_loss = 0
+            N_tokens = batch.text.size(0) - 4
+            for i in range(N_tokens):
+                batch_loss += train_batch(model, criterion, optim, batch.text[i:i+4], batch.text[i+4])
+            batches += 1
+            epoch_loss += batch_loss/N_tokens
+        epoch_loss /= batches
+        print("Epoch ", e, " Loss: ", epoch_loss, "Perplexity: ", math.exp(epoch_loss))
         loss = evaluate(model, val_iter)
-        print("Epoch Val Loss: ", loss, "Perplexity: ", math.exp(loss)) 
-        loss = evaluate(model, test_iter)
-        print("Epoch Test Loss: ", loss, "Perplexity: ", math.exp(loss))
+        print("Epoch Val Loss: ", loss, "Perplexity: ", math.exp(loss))
+        loss = evaluate(model, train_iter)
+        print("Epoch Train Loss: ", loss, "Perplexity: ", math.exp(loss))
 
 if __name__ == "__main__": 
     if torch.cuda.is_available():
@@ -80,8 +85,8 @@ if __name__ == "__main__":
     # size of the embeddings and vectors
     n_embedding = 30
     n_hidden = 60
-    seq_len = 5
-    n_epochs = 20
+    seq_len = 4
+    n_epochs = 30
     learning_rate = .1
 
     # Our input $x$
@@ -110,4 +115,4 @@ if __name__ == "__main__":
         npl.cuda() 
 
     run_training(npl, criterion, optim, test_iter)
-    torch.save(npl.state_dict(), 'npl_model.pt')
+    torch.save(npl.state_dict(), 'npl_full_model.pt')
