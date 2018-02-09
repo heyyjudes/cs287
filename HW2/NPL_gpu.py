@@ -4,7 +4,7 @@ import torch
 import math 
 import torch.nn as nn 
 from torchtext.vocab import Vectors
-DEBUG = True 
+DEBUG = False 
 
 class NPLM(nn.Module):
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len):
@@ -57,7 +57,7 @@ def train_batch(model, criterion, optim, batch, label):
     return loss.data[0]
 
 # training loop
-def run_train(model, criterion, optim, data_iterator):
+def run_training(model, criterion, optim, data_iterator):
 
     for e in range(n_epochs):
         batches = 0
