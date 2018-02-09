@@ -71,10 +71,10 @@ def run_train(model, criterion, optim, data_iterator):
             epoch_loss += batch_loss/N_tokens
         epoch_loss /= batches
         print("Epoch ", e, " Loss: ", epoch_loss, "Perplexity: ", math.exp(epoch_loss))
-        loss = evaluate(model, val_iter)
-        print("Epoch Val Loss: ", loss, "Perplexity: ", math.exp(loss))
-        loss = evaluate(model, train_iter)
-        print("Epoch Train Loss: ", loss, "Perplexity: ", math.exp(loss))
+        train_loss = evaluate(model, data_iterator)
+        print("Epoch Train Loss: ", train_loss, "Perplexity: ", math.exp(train_loss))
+        val_loss = evaluate(model, val_iter)
+        print("Epoch Val Loss: ", val_loss, "Perplexity: ", math.exp(val_loss))
 
 if __name__ == "__main__": 
     if torch.cuda.is_available():
@@ -114,5 +114,5 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         npl.cuda() 
 
-    run_training(npl, criterion, optim, test_iter)
+    run_training(npl, criterion, optim, train_iter)
     torch.save(npl.state_dict(), 'npl_full_model.pt')
