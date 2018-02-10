@@ -27,8 +27,7 @@ class NPLM(nn.Module):
         out = direct + hidden_out
         return self.softmax(out)
 
-def evaluate(model, data_iterator
-            ):
+def evaluate(model, data_iterator):
     # Turn on evaluation mode which disables dropout.
     #model.eval()
     total_loss = 0
@@ -75,6 +74,7 @@ def run_training(model, criterion, optim, data_iterator):
         print("Epoch Train Loss: ", train_loss, "Perplexity: ", math.exp(train_loss))
         val_loss = evaluate(model, val_iter)
         print("Epoch Val Loss: ", val_loss, "Perplexity: ", math.exp(val_loss))
+        torch.save(npl.state_dict(), 'npl_full_model.pt')
 
 if __name__ == "__main__": 
     if torch.cuda.is_available():
@@ -84,10 +84,11 @@ if __name__ == "__main__":
 
     # size of the embeddings and vectors
     n_embedding = 30
-    n_hidden = 60
+    n_hidden = 100
     seq_len = 4
-    n_epochs = 30
+    n_epochs = 20
     learning_rate = .1
+    weight_decay = 1e-4
 
     # Our input $x$
     TEXT = torchtext.data.Field()
@@ -109,10 +110,10 @@ if __name__ == "__main__":
     # initialize LSTM
     npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
     criterion = nn.NLLLoss()
-    optim = torch.optim.SGD(npl.parameters(), lr = learning_rate)
+    optim = torch.optim.SGD(npl.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     if torch.cuda.is_available():
         npl.cuda() 
 
     run_training(npl, criterion, optim, train_iter)
-    torch.save(npl.state_dict(), 'npl_full_model.pt')
+
