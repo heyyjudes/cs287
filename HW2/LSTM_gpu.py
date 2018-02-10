@@ -16,6 +16,7 @@ class LSTM(nn.Module):
         self.embed = nn.Embedding(V_vocab_dim, M_embed_dim)
         self.lstm = nn.LSTM(M_embed_dim, self.hidden_dim, dropout=0.5)
         self.fc = nn.Linear(self.hidden_dim, V_vocab_dim)
+        self.dropout = nn.Dropout(p=0.3)
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
@@ -35,10 +36,19 @@ class LSTM(nn.Module):
         lstm_out, self.hidden = self.lstm(embeds, self.hidden)
         # print(lstm_out.shape)
         # lstm_out N_seq_len x B_batch_size x H_hidden_dim
-        out = self.fc(lstm_out)
+        out = self.fc(self.dropout(lstm_out))
         # print(out.shape)
         # out N_seq_len x B_batch_size x V_vocab_dim
         return out
+
+    def repackage_hidden(self, h):
+        if type(h) == torch.autograd.Variable:
+            if torch.cuda.is_available():
+                return torch.autograd.Variable(h.data).cuda()
+            else:
+                return torch.autograd.Variable(h.data)
+        else:
+            return tuple(self.repackage_hidden(v) for v in h)
 
 def evaluate(model, data_iterator):
     # Turn on evaluation mode which disables dropout.
@@ -46,7 +56,8 @@ def evaluate(model, data_iterator):
     total_loss = 0
     batch_count = 0
     for batch in iter(data_iterator):
-        model.hidden = model.init_hidden()
+        #model.hidden = model.init_hidden()
+        model.hidden = model.repackage_hidden(model.hidden)
         output = model(batch.text)
         batch_loss = criterion(output.view(-1, model.vocab_dim), batch.target.view(-1)).data
         total_loss += batch_loss
@@ -56,7 +67,8 @@ def evaluate(model, data_iterator):
 def train_batch(model, criterion, optim, batch, target):
     # initialize hidden vectors
     model.zero_grad()
-    model.hidden = model.init_hidden()
+    #model.hidden = model.init_hidden()
+    model.hidden = model.repackage_hidden(model.hidden)
     # calculate forward pass
     y = model(batch)
     # calculate loss
@@ -120,8 +132,8 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         lstm_model.cuda()
 
-    n_epochs = 10
-    learning_rate = .1
+    n_epochs = 20
+    learning_rate = .5
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.SGD(lstm_model.parameters(), lr=learning_rate)
 
