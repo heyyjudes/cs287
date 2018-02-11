@@ -4,8 +4,8 @@ import torch
 import math 
 import torch.nn as nn 
 from torchtext.vocab import Vectors
-DEBUG = False 
-RETRAIN = True 
+DEBUG = False
+RETRAIN = False
 
 class NPLM(nn.Module):
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len):
@@ -85,11 +85,10 @@ if __name__ == "__main__":
 
     # size of the embeddings and vectors
     n_embedding = 30
-    n_hidden = 100
+    n_hidden = 50
     seq_len = 4
     n_epochs = 20
-    learning_rate = .1
-    weight_decay = 1e-4
+    learning_rate = 0.01
 
     # Our input $x$
     TEXT = torchtext.data.Field()
@@ -105,15 +104,19 @@ if __name__ == "__main__":
         len(TEXT.vocab)
         print('len(TEXT.vocab)', len(TEXT.vocab))
 
-    train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
-        (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
+    if torch.cuda.is_available():
+        train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
+            (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
+    else:
+        train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
+        (train, val, test), batch_size=12, device=-1, bptt_len=32, repeat=False, shuffle=False)
 
     # initialize LSTM
     npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
     if RETRAIN == True: 
         npl.load_state_dict(torch.load('npl_full_model.pt')) 
     criterion = nn.NLLLoss()
-    optim = torch.optim.SGD(npl.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    optim = torch.optim.SGD(npl.parameters(), lr=learning_rate)
 
     if torch.cuda.is_available():
         npl.cuda() 
