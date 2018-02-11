@@ -6,7 +6,7 @@ import torch.nn as nn
 from torchtext.vocab import Vectors
 
 DEBUG = False
-
+RETRAIN = True
 class LSTM(nn.Module):
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len, B_batch_size):
         super(LSTM, self).__init__()
@@ -97,7 +97,7 @@ def run_training(model, criterion, optim, data_iterator, val_iter):
         print("Epoch Train Loss: ", train_loss, "Perplexity: ", math.exp(train_loss))
         val_loss = evaluate(model, val_iter)
         print("Epoch Val Loss: ", val_loss, "Perplexity: ", math.exp(val_loss))
-        torch.save(model.state_dict(), 'LSTM_small_model.pt')
+        torch.save(model.state_dict(), 'LSTM_full_model.pt')
 
 if __name__ == "__main__":
     # Our input $x$
@@ -129,11 +129,12 @@ if __name__ == "__main__":
 
     # initialize LSTM
     lstm_model = LSTM(len(TEXT.vocab), n_embedding, n_hidden, seq_len, batch_size)
-
+    if RETRAIN == True: 
+        lstm_model.load_state_dict(torch.load('LSTM_small_model.pt'))
     if torch.cuda.is_available():
         lstm_model.cuda()
 
-    n_epochs = 20
+    n_epochs = 10
     learning_rate = .7
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.SGD(lstm_model.parameters(), lr=learning_rate)

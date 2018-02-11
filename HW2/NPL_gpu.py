@@ -5,6 +5,7 @@ import math
 import torch.nn as nn 
 from torchtext.vocab import Vectors
 DEBUG = False 
+RETRAIN = True 
 
 class NPLM(nn.Module):
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len):
@@ -109,6 +110,8 @@ if __name__ == "__main__":
 
     # initialize LSTM
     npl = NPLM(len(TEXT.vocab), n_embedding, n_hidden, seq_len)
+    if RETRAIN == True: 
+        npl.load_state_dict(torch.load('npl_full_model.pt')) 
     criterion = nn.NLLLoss()
     optim = torch.optim.SGD(npl.parameters(), lr=learning_rate, weight_decay=weight_decay)
 

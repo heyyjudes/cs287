@@ -20,7 +20,7 @@ TEXT.build_vocab(train)
 print('len(TEXT.vocab)', len(TEXT.vocab))
 
 lstm_model = LSTM(len(TEXT.vocab), n_embedding, n_hidden, seq_len, batch_size)
-lstm_model.load_state_dict(torch.load('LSTM_small_model.pt'))
+lstm_model.load_state_dict(torch.load('LSTM_full_model.pt'))
 lstm_model.cuda()
 lstm_model.eval()
 with open("sample.txt", "w") as fout: 
