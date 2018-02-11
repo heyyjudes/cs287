@@ -5,7 +5,7 @@ import math
 import torch.nn as nn
 from torchtext.vocab import Vectors
 
-DEBUG = True
+DEBUG = False
 
 class LSTM(nn.Module):
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len, B_batch_size):
@@ -28,13 +28,14 @@ class LSTM(nn.Module):
                     torch.autograd.Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
 
     def forward(self, sentence):
-        # print(sentence.shape)
+        #print(sentence.shape)
         # input size N_seq_len x B_batch_size
         embeds = self.embed(sentence)
-        # print(embeds.shape)
+        #print(embeds.shape)
+        #print(self.hidden.shape)
         # embeds size N_seq_len x B_batch_size x M_embed_dim
         lstm_out, self.hidden = self.lstm(embeds, self.hidden)
-        # print(lstm_out.shape)
+        #print(lstm_out.shape)
         # lstm_out N_seq_len x B_batch_size x H_hidden_dim
         out = self.fc(self.dropout(lstm_out))
         # print(out.shape)
@@ -122,7 +123,7 @@ if __name__ == "__main__":
 
     # size of the embeddings and vectors
     n_embedding = 30
-    n_hidden = 30
+    n_hidden = 300
     seq_len = 32
     batch_size = 12
 
@@ -133,7 +134,7 @@ if __name__ == "__main__":
         lstm_model.cuda()
 
     n_epochs = 20
-    learning_rate = .5
+    learning_rate = .7
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.SGD(lstm_model.parameters(), lr=learning_rate)
 
