@@ -3,20 +3,32 @@ import torchtext
 import torch
 import math
 import torch.nn as nn
-from torchtext.vocab import Vectors
+from torchtext.vocab import Vectors, GloVe
+from torch.autograd import Variable
 
 DEBUG = False
-RETRAIN = True
+RETRAIN = False
+
+
 class LSTM(nn.Module):
-    def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len, B_batch_size):
+    def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len, B_batch_size, vectors):
         super(LSTM, self).__init__()
         self.batch_size = B_batch_size
         self.hidden_dim = H_hidden_dim
         self.vocab_dim = V_vocab_dim
+        self.seq_len = N_seq_len
         self.embed = nn.Embedding(V_vocab_dim, M_embed_dim)
-        self.lstm = nn.LSTM(M_embed_dim, self.hidden_dim)
-        self.fc = nn.Linear(self.hidden_dim, V_vocab_dim)
-        self.dropout = nn.Dropout(p=0.5)
+        self.embed.weight.data.copy_(vectors)
+        self.dropout = nn.Dropout(p=0.3)
+        self.lstm = nn.LSTM(M_embed_dim, self.hidden_dim, dropout=0.3)
+
+        # attn
+        self.W_s = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False)
+        self.tanh = nn.Tanh()
+        self.softmax = nn.Softmax()
+        self.V_s = nn.Linear(self.hidden_dim, 1, bias=False)
+
+        self.fc = nn.Linear(self.hidden_dim * 2, V_vocab_dim)
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
@@ -28,42 +40,51 @@ class LSTM(nn.Module):
                     torch.autograd.Variable(torch.zeros(1, self.batch_size, self.hidden_dim)))
 
     def forward(self, sentence):
-        #print(sentence.shape)
+        # print(sentence.shape)
         # input size N_seq_len x B_batch_size
         embeds = self.embed(sentence)
-        #print(embeds.shape)
-        #print(self.hidden.shape)
+
         # embeds size N_seq_len x B_batch_size x M_embed_dim
         lstm_out, self.hidden = self.lstm(embeds, self.hidden)
-        #print(lstm_out.shape)
+
+        # attention layer
+        score = self.tanh(self.W_s(lstm_out))
+        score = self.V_s(score)
+        attn_weights = self.softmax(score.squeeze(2))
+        attn_out = torch.bmm(
+            attn_weights.t().unsqueeze(1),
+            lstm_out.permute(1, 0, 2))
+        attn_seq = tuple([attn_out for i in range(self.seq_len)])
+        attn_out = torch.cat(attn_seq, 1)
+
+        # cat attention with lstm out
+        merged = torch.cat((attn_out.permute(1, 0, 2),
+                            lstm_out), dim=2)
+
         # lstm_out N_seq_len x B_batch_size x H_hidden_dim
-        out = self.fc(self.dropout(lstm_out))
-        # print(out.shape)
+        out = self.fc(self.dropout(merged))
         # out N_seq_len x B_batch_size x V_vocab_dim
         return out
 
     def repackage_hidden(self, h):
-        if type(h) == torch.autograd.Variable:
-            if torch.cuda.is_available():
-                return torch.autograd.Variable(h.data).cuda()
-            else:
-                return torch.autograd.Variable(h.data)
+        if type(h) == Variable:
+            return Variable(h.data)
         else:
             return tuple(self.repackage_hidden(v) for v in h)
 
 def evaluate(model, data_iterator):
     # Turn on evaluation mode which disables dropout.
-    model.eval()
-    criterion = nn.CrossEntropyLoss()
+    #model.eval()
     total_loss = 0
     batch_count = 0
     for batch in iter(data_iterator):
         #model.hidden = model.init_hidden()
-        model.hidden = model.repackage_hidden(model.hidden)
-        output = model(batch.text)
-        batch_loss = criterion(output.view(-1, model.vocab_dim), batch.target.view(-1)).data
-        total_loss += batch_loss
-        batch_count += 1
+        if batch.text.size(0) == 10:
+            model.hidden = model.repackage_hidden(model.hidden)
+            output = model(batch.text)
+            batch_loss = criterion(output.view(-1, model.vocab_dim), batch.target.view(-1)).data
+            total_loss += batch_loss
+            batch_count += 1
     return total_loss[0] / batch_count
 
 def train_batch(model, criterion, optim, batch, target):
@@ -85,20 +106,20 @@ def train_batch(model, criterion, optim, batch, target):
 def run_training(model, criterion, optim, data_iterator, val_iter):
 
     for e in range(n_epochs):
-        model.train()
         batches = 0
         epoch_loss = 0
         for batch in iter(data_iterator):
-            batch_loss = train_batch(model, criterion, optim, batch.text, batch.target)
-            batches += 1
-            epoch_loss += batch_loss
+            if batch.text.size(0) == 10:
+                batch_loss = train_batch(model, criterion, optim, batch.text, batch.target)
+                batches += 1
+                epoch_loss += batch_loss
         epoch_loss /= batches
         print("Epoch ", e, " Loss: ", epoch_loss, "Perplexity: ", math.exp(epoch_loss))
         train_loss = evaluate(model, data_iterator)
         print("Epoch Train Loss: ", train_loss, "Perplexity: ", math.exp(train_loss))
         val_loss = evaluate(model, val_iter)
         print("Epoch Val Loss: ", val_loss, "Perplexity: ", math.exp(val_loss))
-        torch.save(model.state_dict(), 'LSTM_full_model.pt')
+        torch.save(model.state_dict(), 'LSTM_ATN_10_model.pt')
 
 if __name__ == "__main__":
     # Our input $x$
@@ -115,28 +136,31 @@ if __name__ == "__main__":
         len(TEXT.vocab)
         print('len(TEXT.vocab)', len(TEXT.vocab))
 
+    TEXT.vocab.load_vectors(vectors=GloVe(name="6B", dim="300"))
+
     if torch.cuda.is_available():
         train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
-            (train, val, test), batch_size=12, device=None, bptt_len=32, repeat=False, shuffle=False)
-    else: 
+            (train, val, test), batch_size=12, device=None, bptt_len=10, repeat=False, shuffle=False)
+    else:
         train_iter, val_iter, test_iter = torchtext.data.BPTTIterator.splits(
-        (train, val, test), batch_size=12, device=-1, bptt_len=32, repeat=False, shuffle=False)
+        (train, val, test), batch_size=12, device=-1, bptt_len=10, repeat=False, shuffle=False)
 
     # size of the embeddings and vectors
     n_embedding = 300
-    n_hidden = 650
-    seq_len = 32
+    n_hidden = 300
+    seq_len = 10
     batch_size = 12
 
     # initialize LSTM
-    lstm_model = LSTM(len(TEXT.vocab), n_embedding, n_hidden, seq_len, batch_size)
-    if RETRAIN == True: 
-        lstm_model.load_state_dict(torch.load('LSTM_small_model.pt'))
+    lstm_model = LSTM(len(TEXT.vocab), n_embedding, n_hidden, seq_len, batch_size, TEXT.vocab.vectors)
+
+    if RETRAIN == True:
+        lstm_model.load_state_dict(torch.load('LSTM_ATN_small_model.pt'))
     if torch.cuda.is_available():
         lstm_model.cuda()
 
-    n_epochs = 30
-    learning_rate = .7
+    n_epochs = 40
+    learning_rate = .5
     criterion = nn.CrossEntropyLoss()
     optim = torch.optim.SGD(lstm_model.parameters(), lr=learning_rate)
 

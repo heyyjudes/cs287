@@ -5,7 +5,7 @@ import math
 import torch.nn as nn 
 from torchtext.vocab import Vectors
 DEBUG = False
-RETRAIN = False
+RETRAIN = True
 
 class NPLM(nn.Module):
     def __init__(self, V_vocab_dim, M_embed_dim, H_hidden_dim, N_seq_len):
