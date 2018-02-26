@@ -39,7 +39,7 @@ class EncoderLSTM(nn.Module):
 
 
 class AttnDecoderRNN(nn.Module):
-    def __init__(self, hidden_size, output_size, batch_size, dropout=0.1, n_layers=1, max_length=MAX_LEN):
+    def __init__(self, hidden_size, output_size, batch_size, dropout=0.1, n_layers=1, max_length=20):
         super(AttnDecoderRNN, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -91,7 +91,7 @@ class AttnDecoderRNN(nn.Module):
 
 
 def train_batch(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion,
-                max_length=MAX_LEN):
+                max_length=20):
     encoder_hidden = encoder.init_hidden()
 
     encoder_optimizer.zero_grad()
@@ -145,7 +145,7 @@ def train_batch(input_variable, target_variable, encoder, decoder, encoder_optim
     return loss.data[0]
 
 
-def validate(encoder, decoder, val_iter, criterion, max_length=MAX_LEN):
+def validate(encoder, decoder, val_iter, criterion, max_length=20):
     total_loss = 0
     num_batches = 0
     for batch in iter(val_iter):
@@ -185,7 +185,7 @@ def validate(encoder, decoder, val_iter, criterion, max_length=MAX_LEN):
     return total_loss / num_batches
 
 
-def trainIters(encoder, decoder, training_iter, valid_iter, learning_rate=1.0, num_epochs=20):
+def trainIters(encoder, decoder, training_iter, valid_iter, learning_rate=1.0, num_epochs=20, max_length=20):
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
     criterion = nn.NLLLoss(ignore_index=1)
@@ -194,13 +194,13 @@ def trainIters(encoder, decoder, training_iter, valid_iter, learning_rate=1.0, n
         batch_len = 0
         total_loss = 0
         for batch in iter(training_iter):
-            loss = train_batch(batch.src, batch.trg, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
+            loss = train_batch(batch.src, batch.trg, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length)
             total_loss += loss
             batch_len += 1
         train_loss = total_loss / batch_len
         print("train loss: ", train_loss)
         print("train ppl: ", np.exp(train_loss))
-        val_loss = validate(encoder, decoder, valid_iter, criterion)
+        val_loss = validate(encoder, decoder, valid_iter, criterion, max_length)
         print("val loss: ", val_loss)
         print("val ppl: ", np.exp(val_loss))
         torch.save(encoder.state_dict(), 'attn_encoder_model.pt')
@@ -263,4 +263,4 @@ if __name__ == '__main__':
     if use_cuda:
         encoder1 = encoder1.cuda()
         decoder1 = decoder1.cuda()
-    trainIters(encoder1, decoder1, train_iter, val_iter, num_epochs=10)
+    trainIters(encoder1, decoder1, list(train_iter)[:200], val_iter, num_epochs=10, max_length=MAX_LEN+2)
