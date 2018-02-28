@@ -7,7 +7,14 @@ import torch.nn.functional as F
 from torchtext import data
 from torchtext import datasets
 import spacy
+import numpy as np
 
+BATCH_SIZE = 64
+SOS_token = 2
+EOS_token = 3
+PAD_token = 1
+MAX_LEN = 20 
+teacher_forcing_ratio = 0.5
 
 class EncoderLSTM(nn.Module):
     def __init__(self, input_size, h_size, batch_size, n_layers=1, dropout=0):
@@ -54,98 +61,117 @@ class DecoderLSTM(nn.Module):
         return output, hidden
 
 
-def train_batch(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion):
+def train_batch(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length=MAX_LEN):
     encoder_hidden = encoder.init_hidden()
-
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
-
+    
+    #useful lengths 
+    input_length = input_variable.size()[0]
     target_length = target_variable.size()[0]
     batch_size = target_variable.size()[1]
-    loss = 0
-    if batch_size != 32:
-        return loss
-
-    _, encoder_hidden = encoder(input_variable, encoder_hidden)
-    decoder_input = Variable(torch.ones(1, batch_size).long()) * SOS_token
-    decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-
+    
+    # zero words and zero loss 
+    loss = 0 
+    total_words = 0 
+    
+    encoder_output_short, encoder_hidden = encoder(input_variable, encoder_hidden)
+    
+    encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+    encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
+    
+    # NO ATTN: works fine 
     decoder_hidden = encoder_hidden
+    decoder_output, decoder_hidden = decoder(target_variable, decoder_hidden) 
 
-    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+    #initialize last row as padding tokens
+    last_row = torch.ones(1, batch_size).long()
+    last_row = last_row.cuda() if use_cuda else last_row
+    
+    #shift target from 1:n + padding row
+    shifted_target = Variable(torch.cat((target_variable[1:, :].data.long(), last_row)))
+    m, i = torch.max(decoder_output, dim=2)
 
-    if use_teacher_forcing:
-        for t in range(target_length):
-            decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
-            decoder_input = target_variable[t].view(1, -1)
-            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-            loss += criterion(decoder_output.squeeze(0), target_variable[t]) / target_length
-    else:
-        for t in range(target_length):
-            decoder_output, encoder_hidden = decoder(decoder_input, encoder_hidden)
-            topv, topi = torch.max(decoder_output, 2)
-            decoder_input = topi
-            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-            loss += criterion(decoder_output.squeeze(0), target_variable[t]) / target_length
+    #calculate decoder_output loss with shifted target loss
+
+    loss = criterion(decoder_output.view(target_length*batch_size, -1), shifted_target.view(target_length*batch_size))
+    # count total words
+    total_words = shifted_target.ne(PAD_token).int().sum()
 
     loss.backward()
 
-    torch.nn.utils.clip_grad_norm(encoder.parameters(), 5.0)
-    torch.nn.utils.clip_grad_norm(decoder.parameters(), 5.0)
+    torch.nn.utils.clip_grad_norm(encoder.parameters(), 3.0)
+    torch.nn.utils.clip_grad_norm(decoder.parameters(), 3.0)
 
     encoder_optimizer.step()
     decoder_optimizer.step()
+    return loss.data[0]/total_words.data[0]
 
-    return loss.data[0]
 
-
-def validate(encoder, decoder, val_iter, criterion):
+def validate(encoder, decoder, val_iter, criterion, max_length = MAX_LEN):
+    encoder.eval() 
+    decoder.eval() 
     total_loss = 0
     num_batches = 0
+    total_words = 0 
     for batch in iter(val_iter):
-
+        num_batches += 1 
+        input_length = batch.src.size()[0]
         target_length = batch.trg.size()[0]
-        batch_length = batch.src.size()[1]
-        if batch_length != 32:
+        batch_size = batch.src.size()[1]
+        if batch_size != 64:
             break
         encoder_hidden = encoder.init_hidden()
-        _, encoder_hidden = encoder(batch.src, encoder_hidden)
-        decoder_input = Variable(torch.ones(1, batch_length).long() * SOS_token)
-        decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-
+         
         decoder_hidden = encoder_hidden
+        decoder_output, decoder_hidden = decoder(batch.trg, decoder_hidden) 
+           
+        m, i = torch.max(decoder_output, dim=2)
 
-        decoded_words = []
-        loss = 0
-        for di in range(target_length):
-            decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
-            topv, topi = torch.max(decoder_output, 2)
-            decoded_words.append(topi)
-            decoder_input = topi
-            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-            loss += criterion(decoder_output.squeeze(0), batch.trg[di])
+        first_row = torch.ones(1, batch_size).long()
+        first_row = first_row.cuda() if use_cuda else first_row
+        
+        shifted_target = Variable(torch.cat((batch.trg[1:, :].data.long(), first_row)))
+        loss = criterion(decoder_output.view(target_length*batch_size, -1), shifted_target.view(target_length*batch_size))
+        total_words += shifted_target.ne(PAD_token).int().sum()
 
-        total_loss += loss.data[0] / target_length
-        num_batches += 1
-    return total_loss / num_batches
+        total_loss += loss.data[0]
 
+    return total_loss / total_words.data[0]
 
-def trainIters(encoder, decoder, training_iter, valid_iter, learning_rate=0.7, num_epochs=20):
+def trainIters(encoder, decoder, training_iter, valid_iter, target_vocab_len, learning_rate=0.7, num_epochs=20):
+    encoder.train() 
+    decoder.train() 
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    criterion = nn.NLLLoss(ignore_index=1)
-
+    
+    #mask weight to not consider in loss 
+    mask_weight = Variable(torch.FloatTensor(target_vocab_len).fill_(1))
+    mask_weight[PAD_token] = 0
+    mask_weight = mask_weight.cuda() if use_cuda else mask_weight
+    
+    #pass mask weight in to NLL Loss without size_average
+    criterion = nn.NLLLoss(weight=mask_weight, size_average=False)
+    
     for e in range(num_epochs):
+        #initialise total loss and batch count
         batch_len = 0
         total_loss = 0
+        
         for batch in iter(training_iter):
-            loss = train_batch(batch.src, batch.trg, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
-            total_loss += loss
-            batch_len += 1
+            if batch.src.size()[1] == 64: 
+                loss = train_batch(batch.src, batch.trg, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
+                total_loss += loss
+                batch_len += 1
+            
+        # divide total loss by batch_length
         train_loss = total_loss / batch_len
+        
         print("train loss: ", train_loss)
+        print("train ppl: ", np.exp(train_loss))
         val_loss = validate(encoder, decoder, valid_iter, criterion)
         print("val loss: ", val_loss)
+        print("val ppl: ", np.exp(val_loss))
         torch.save(encoder.state_dict(), 'encoder_model.pt')
         torch.save(decoder.state_dict(), 'decoder_model.pt')
 
@@ -159,21 +185,26 @@ def tokenize_en(text):
 
 if __name__ == '__main__':
     # Set up
+    # Set up 
     spacy_de = spacy.load('de')
     spacy_en = spacy.load('en')
 
+    def tokenize_de(text):
+        return [tok.text for tok in spacy_de.tokenizer(text)]
+
+    def tokenize_en(text):
+        return [tok.text for tok in spacy_en.tokenizer(text)]
+
     BOS_WORD = '<s>'
     EOS_WORD = '</s>'
-    DE = data.Field(tokenize=tokenize_de, init_token=BOS_WORD, eos_token=EOS_WORD)
-    EN = data.Field(tokenize=tokenize_en, init_token=BOS_WORD, eos_token=EOS_WORD)  # only target needs BOS/EOS
+    DE = data.Field(tokenize=tokenize_de)
+    EN = data.Field(tokenize=tokenize_en, init_token = BOS_WORD, eos_token = EOS_WORD) # only target needs BOS/EOS
 
     MAX_LEN = 20
-    train, val, test = datasets.IWSLT.splits(exts=('.de', '.en'), fields=(DE, EN),
-                                             filter_pred=lambda x: len(vars(x)['src']) <= MAX_LEN and
-                                                                   len(vars(x)['trg']) <= MAX_LEN)
-    print(train.fields)
-    print(len(train))
-    print(vars(train[0]))
+    train, val, test = datasets.IWSLT.splits(exts=('.de', '.en'), fields=(DE, EN), 
+                                             filter_pred=lambda x: len(vars(x)['src']) <= MAX_LEN and 
+                                             len(vars(x)['trg']) <= MAX_LEN)
+
 
     MIN_FREQ = 5
     DE.build_vocab(train.src, min_freq=MIN_FREQ)
@@ -182,13 +213,10 @@ if __name__ == '__main__':
     print("Size of German vocab", len(DE.vocab))
     print(EN.vocab.freqs.most_common(10))
     print("Size of English vocab", len(EN.vocab))
-    print(DE.vocab.stoi["<s>"], DE.vocab.stoi["</s>"])  # vocab index for <s>, </s>
-    print(EN.vocab.stoi["<s>"], EN.vocab.stoi["</s>"])  # vocab index for <s>, </s>
+    # print(DE.vocab.stoi["<s>"], DE.vocab.stoi["</s>"]) #vocab index for <s>, </s>
+    print(EN.vocab.stoi["<s>"], EN.vocab.stoi["</s>"]) #vocab index for <s>, </s>
+    print(EN.vocab.stoi["<pad>"])
 
-    BATCH_SIZE = 32
-    SOS_token = 2
-    EOS_token = 3
-    teacher_forcing_ratio = 0.5
 
     use_cuda = torch.cuda.is_available()
     print(use_cuda)
@@ -201,9 +229,9 @@ if __name__ == '__main__':
                                                          repeat=False, sort_key=lambda x: len(x.src))
 
     hidden_size = 500
-    encoder1 = EncoderLSTM(len(DE.vocab), hidden_size, batch_size=32, dropout=0.3, n_layers=2)
-    decoder1 = DecoderLSTM(hidden_size, len(EN.vocab), batch_size=32, dropout=0.3, n_layers=2)
+    encoder1 = EncoderLSTM(len(DE.vocab), hidden_size, batch_size=64, dropout=0.3, n_layers=2)
+    decoder1 = DecoderLSTM(hidden_size, len(EN.vocab), batch_size=64, dropout=0.3, n_layers=2)
     if use_cuda:
         encoder1 = encoder1.cuda()
         decoder1 = decoder1.cuda()
-    trainIters(encoder1, decoder1, train_iter, val_iter, num_epochs=10)
+    trainIters(encoder1, decoder1, train_iter, val_iter, len(EN.vocab), num_epochs=10)
