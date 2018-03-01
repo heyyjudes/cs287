@@ -19,27 +19,35 @@ teacher_forcing_ratio = 0.5
 
 
 class EncoderLSTM(nn.Module):
-    def __init__(self, input_size, h_size, batch_size, n_layers=1, dropout=0):
+    def __init__(self, input_size, h_size, batch_size, n_layers=1, dropout=0, bidir=False):
         super(EncoderLSTM, self).__init__()
         self.num_layers = n_layers
         self.hidden_size = h_size
         self.batch_size = batch_size
+        self.bidir=bidir
+        self.dropout = nn.Dropout(dropout)
         self.embed = nn.Embedding(input_size, h_size)
-        self.lstm = nn.LSTM(h_size, h_size, dropout=dropout, num_layers=n_layers)
+        self.lstm = nn.LSTM(h_size, h_size, dropout=dropout, num_layers=n_layers, bidirectional=bidir)
 
     def forward(self, input_src, hidden):
         embedded = self.embed(input_src)
+        embedded = self.dropout(embedded)
         output, hidden = self.lstm(embedded, hidden)
         return output, hidden
 
     def init_hidden(self):
-        result = (Variable(torch.zeros(self.num_layers, self.batch_size, self.hidden_size)),
-                  Variable(torch.zeros(self.num_layers, self.batch_size, self.hidden_size)))
+        if self.bidir: 
+           num_dir = 2
+        else: 
+           num_dir = 1      
+        result = (Variable(torch.zeros(self.num_layers*num_dir , self.batch_size, self.hidden_size)),
+                  Variable(torch.zeros(self.num_layers*num_dir, self.batch_size, self.hidden_size)))
         if use_cuda:
-            return (Variable(torch.zeros(self.num_layers, self.batch_size, self.hidden_size)).cuda(),
-                    Variable(torch.zeros(self.num_layers, self.batch_size, self.hidden_size)).cuda())
+            return (Variable(torch.zeros(self.num_layers*num_dir, self.batch_size, self.hidden_size)).cuda(),
+                    Variable(torch.zeros(self.num_layers*num_dir, self.batch_size, self.hidden_size)).cuda())
         else:
             return result
+
 
 class Attn(nn.Module):
     def __init__(self, hidden_size):
@@ -61,30 +69,10 @@ class Attn(nn.Module):
         return F.softmax(attn_energies, dim=2)
         
 
-class DecoderLSTM(nn.Module):
-    def __init__(self, hidden_size, output_size, batch_size, n_layers=1, dropout=0):
-        super(DecoderLSTM, self).__init__()
-        self.batch_size = batch_size
-        self.hidden_size = hidden_size
-
-        self.embedding = nn.Embedding(output_size, hidden_size)
-        self.lstm = nn.LSTM(hidden_size, hidden_size, dropout=dropout, num_layers=n_layers)
-        self.out = nn.Linear(hidden_size, output_size)
-        self.dropout = nn.Dropout(dropout)
-        self.softmax = nn.LogSoftmax(dim=2)
-
-    def forward(self, input, hidden):
-        output = self.embedding(input)
-        output = F.relu(output)
-        output, hidden = self.lstm(output, hidden)
-        output = self.out(self.dropout(output))
-        output = self.softmax(output)
-        return output, hidden
-    
 class AttnDecoderRNN(nn.Module):
     def __init__(self, hidden_size, output_size, batch_size, dropout=0.1, n_layers=1, max_length=MAX_LEN):
         super(AttnDecoderRNN, self).__init__()
-        self.hidden_size = hidden_size
+        self.hidden_size = hidden_size*2
         self.output_size = output_size
         self.max_length = max_length
         self.num_layers = n_layers
@@ -101,6 +89,7 @@ class AttnDecoderRNN(nn.Module):
         #input_len x batch_size 
 
         embedded = self.embedding(input_data) #batch_size x target_len x hidden dim
+        embedded = F.relu(embedded)
         #lstm_output -> target_len x batch_size x hidden_dim
         lstm_output, lstm_hidden = self.lstm(embedded, hidden)
 
@@ -109,8 +98,11 @@ class AttnDecoderRNN(nn.Module):
             attn_hidden = hidden[0][-1].unsqueeze(0)
         else: 
             attn_hidden = hidden[0]
-        attn_input = torch.cat((attn_hidden, lstm_output[:-1]))
-
+        
+        if(lstm_output.size()[0] > 1):  
+            attn_input = torch.cat((attn_hidden, lstm_output[:-1]))
+        else: 
+            attn_input = attn_hidden
         # encoder_outputs -> max_len x batch_size x hidden_dim
         attn_weights = self.attn(attn_input, encoder_outputs)
         
@@ -137,7 +129,7 @@ class AttnDecoderRNN(nn.Module):
         else:
             return result
 
-def train_batch(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length=MAX_LEN+2):
+def train_batch(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length=MAX_LEN):
     encoder_hidden = encoder.init_hidden()
     encoder_optimizer.zero_grad()
     decoder_optimizer.zero_grad()
@@ -146,22 +138,24 @@ def train_batch(input_variable, target_variable, encoder, decoder, encoder_optim
     input_length = input_variable.size()[0]
     target_length = target_variable.size()[0]
     batch_size = target_variable.size()[1]
-    
+    layers = encoder.num_layers
     # zero words and zero loss 
     loss = 0 
     total_words = 0 
     
     encoder_output_short, encoder_hidden = encoder(input_variable, encoder_hidden)
     
-    encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+    encoder_outputs = Variable(torch.zeros(max_length, batch_size, 2*encoder.hidden_size))
     encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
     
-    #pad encoder outputs for attention 
     #ATTENTION
     encoder_outputs[:input_length, :, :] = encoder_output_short 
 
-    decoder_hidden = encoder_hidden
-    
+    if layers != 1: 
+        decoder_hidden = (torch.cat((encoder_hidden[0][-layers:], encoder_hidden[0][-layers:]), dim=2) , torch.cat((encoder_hidden[1][-layers:], encoder_hidden[1][-layers:]), dim=2)) 
+    else: 
+        decoder_hidden = (torch.cat((encoder_hidden[0][0].unsqueeze(0), encoder_hidden[0][1].unsqueeze(0)), dim=2) , torch.cat((encoder_hidden[1][0].unsqueeze(0), encoder_hidden[1][1].unsqueeze(0)), dim=2)) 
+         
     #using encoder output and target variable 
 
     decoder_output, decoder_hidden, decoder_attention = decoder(target_variable, decoder_hidden, encoder_outputs)
@@ -196,22 +190,28 @@ def validate(encoder, decoder, val_iter, criterion, max_length = MAX_LEN):
     total_loss = 0
     num_batches = 0
     total_words = 0 
+    layers = encoder.num_layers
     for batch in iter(val_iter):
-        
+        num_batches += 1 
         input_length = batch.src.size()[0]
         target_length = batch.trg.size()[0]
         batch_size = batch.src.size()[1]
         if batch_size != 64:
             break
         encoder_hidden = encoder.init_hidden()
-        
+         
         encoder_output_short, encoder_hidden = encoder(batch.src, encoder_hidden)
-        encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+        encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size*2))
         encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
         encoder_outputs[:input_length, :, :] = encoder_output_short      
-
-        decoder_hidden = encoder_hidden
+        if layers != 1: 
+            decoder_hidden = (torch.cat((encoder_hidden[0][-layers:], encoder_hidden[0][-layers:]), dim=2) , torch.cat((encoder_hidden[1][-layers:], encoder_hidden[1][-layers:]), dim=2)) 
+        else: 
+            decoder_hidden = (torch.cat((encoder_hidden[0][0].unsqueeze(0), encoder_hidden[0][1].unsqueeze(0)), dim=2) , torch.cat((encoder_hidden[1][0].unsqueeze(0), encoder_hidden[1][1].unsqueeze(0)), dim=2)) 
+         
         decoder_output, decoder_hidden, decoder_attention = decoder(batch.trg, decoder_hidden, encoder_outputs)
+        
+        m, i = torch.max(decoder_output, dim=2)
                     
         first_row = torch.ones(1, batch_size).long()
         first_row = first_row.cuda() if use_cuda else first_row
@@ -231,7 +231,7 @@ def trainIters(encoder, decoder, training_iter, valid_iter, target_vocab_len, le
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
     schedule = optim.lr_scheduler.ReduceLROnPlateau(
-        decoder_optimizer, patience=1, factor=0.5, threshold=1e-3)
+        decoder_optimizer, patience=1, factor=0.5, threshold=1e-4)
 
     #mask weight to not consider in loss 
     mask_weight = Variable(torch.FloatTensor(target_vocab_len).fill_(1))
@@ -312,10 +312,10 @@ if __name__ == '__main__':
         train_iter, val_iter = data.BucketIterator.splits((train, val), batch_size=BATCH_SIZE, device=-1,
                                                          repeat=False, sort_key=lambda x: len(x.src))
     hidden_size = 512
-    encoder1 = EncoderLSTM(len(DE.vocab), hidden_size, batch_size=64, dropout=0.3, n_layers=3)
-    decoder1 = AttnDecoderRNN(hidden_size, len(EN.vocab), batch_size=64, dropout=0.3, n_layers=3)
+    encoder1 = EncoderLSTM(len(DE.vocab), hidden_size, batch_size=64, dropout=0.3, n_layers=2, bidir=True)
+    decoder1 = AttnDecoderRNN(hidden_size, len(EN.vocab), batch_size=64, dropout=0.3, n_layers=2) 
     if use_cuda:
         encoder1 = encoder1.cuda()
         decoder1 = decoder1.cuda()
-    trainIters(encoder1, decoder1, train_iter, val_iter, len(EN.vocab), num_epochs=15)
+    trainIters(encoder1, decoder1, train_iter, val_iter, len(EN.vocab), num_epochs=10)
 
